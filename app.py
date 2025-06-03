@@ -1,52 +1,92 @@
-# app.py
 import streamlit as st
 import pandas as pd
+import numpy as np
+
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from modelo_regresion import crear_modelo_regresion
-from modelo_clasificacion import crear_modelo_clasificacion
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, accuracy_score, precision_score, recall_score
 
-st.title("🧠 Predicción de Precios de Diamantes con MLP")
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.optimizers import SGD, Adam
 
-modelo_tipo = st.selectbox("Selecciona el tipo de modelo:", ["Regresión", "Clasificación"])
-optimizador = st.selectbox("Selecciona el optimizador:", ["adam", "sgd"])
-epocas = st.slider("Número de épocas", 10, 500, step=10)
-normalizador_tipo = st.radio("Normalización", ["MinMaxScaler", "StandardScaler"])
+# Cargar dataset
+@st.cache_data
+def cargar_datos():
+    df = pd.read_csv("dataset/diamonds.csv")
+    return df
 
-# Carga y preprocesado
-df = pd.read_csv("dataset/diamonds.csv")
+df = cargar_datos()
+
+st.title("Predicción y Clasificación de Diamantes con Perceptrón Multicapa")
+st.write("Dataset cargado:")
+st.dataframe(df.head())
+
+# Entrada y salida
 X = df[['carat', 'depth', 'table']].values
-y = df['price'].values if modelo_tipo == "Regresión" else (df['price'] > 5000).astype(int).values
+y_reg = df['price'].values
+
+# Clasificación binaria: si el precio > 350
+y_clf = (df['price'] > 350).astype(int).values
 
 # Normalización
-scaler = MinMaxScaler() if normalizador_tipo == "MinMaxScaler" else StandardScaler()
-X_norm = scaler.fit_transform(X)
+scaler = MinMaxScaler()
+X_scaled = scaler.fit_transform(X)
 
-# Split
-X_train, X_test, y_train, y_test = train_test_split(X_norm, y, test_size=0.2, random_state=42)
+# División de datos
+X_train_r, X_test_r, y_train_r, y_test_r = train_test_split(X_scaled, y_reg, test_size=0.2, random_state=42)
+X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(X_scaled, y_clf, test_size=0.2, random_state=42)
 
-# Modelo
-if modelo_tipo == "Regresión":
-    model = crear_modelo_regresion(X.shape[1], optimizer=optimizador)
-else:
-    act = st.selectbox("Activación de salida", ["sigmoid", "softmax"])
-    loss = st.selectbox("Función de pérdida", ["binary_crossentropy", "hinge"])
-    model = crear_modelo_clasificacion(X.shape[1], optimizer=optimizador, output_activation=act, loss=loss)
+# Sidebar: configuraciones
+st.sidebar.header("Configuración del modelo")
+opt = st.sidebar.selectbox("Optimizador", ["adam", "sgd"])
+loss_reg = st.sidebar.selectbox("Función de pérdida (regresión)", ["mse", "mae"])
+loss_clf = st.sidebar.selectbox("Función de pérdida (clasificación)", ["binary_crossentropy"])
+epochs = st.sidebar.slider("Épocas de entrenamiento", min_value=10, max_value=200, value=50)
 
-# Entrenamiento
-if st.button("Entrenar modelo"):
-    with st.spinner("Entrenando..."):
-        hist = model.fit(X_train, y_train, epochs=epocas, validation_split=0.2, verbose=0)
-        st.success("Entrenamiento completado")
+# Función para crear modelo MLP
+def crear_modelo(tipo='regresion', optimizador='adam', funcion_loss='mse'):
+    model = Sequential()
+    model.add(Dense(16, input_shape=(X.shape[1],), activation='relu'))
+    model.add(Dense(8, activation='relu'))
 
-        st.line_chart(hist.history)
+    if tipo == 'regresion':
+        model.add(Dense(1, activation='linear'))
+        metricas = ['mae', 'mse']
+    else:
+        model.add(Dense(1, activation='sigmoid'))
+        metricas = ['accuracy', 'Precision', 'Recall']
 
-        # Evaluación
-        loss, *metrics = model.evaluate(X_test, y_test)
-        if modelo_tipo == "Regresión":
-            st.write(f"**MAE:** {metrics[0]:.2f}")
-            st.write(f"**MSE:** {metrics[1]:.2f}")
-        else:
-            st.write(f"**Accuracy:** {metrics[0]:.2f}")
-            st.write(f"**Precision:** {metrics[1]:.2f}")
-            st.write(f"**Recall:** {metrics[2]:.2f}")
+    if optimizador == 'adam':
+        opt = Adam()
+    else:
+        opt = SGD()
+
+    model.compile(optimizer=opt, loss=funcion_loss, metrics=metricas)
+    return model
+
+# Entrenar modelo de regresión
+if st.button("Entrenar modelo de Regresión"):
+    model_reg = crear_modelo('regresion', opt, loss_reg)
+    history = model_reg.fit(X_train_r, y_train_r, epochs=epochs, verbose=0)
+    y_pred_r = model_reg.predict(X_test_r).flatten()
+    mse = mean_squared_error(y_test_r, y_pred_r)
+    mae = mean_absolute_error(y_test_r, y_pred_r)
+    st.subheader("Resultados de regresión")
+    st.write(f"MAE: {mae:.2f}")
+    st.write(f"MSE: {mse:.2f}")
+
+# Entrenar modelo de clasificación
+if st.button("Entrenar modelo de Clasificación"):
+    model_clf = crear_modelo('clasificacion', opt, loss_clf)
+    history = model_clf.fit(X_train_c, y_train_c, epochs=epochs, verbose=0)
+    y_pred_c = model_clf.predict(X_test_c).flatten()
+    y_pred_c_bin = (y_pred_c > 0.5).astype(int)
+    acc = accuracy_score(y_test_c, y_pred_c_bin)
+    prec = precision_score(y_test_c, y_pred_c_bin)
+    rec = recall_score(y_test_c, y_pred_c_bin)
+    st.subheader("Resultados de clasificación")
+    st.write(f"Accuracy: {acc:.2f}")
+    st.write(f"Precision: {prec:.2f}")
+    st.write(f"Recall: {rec:.2f}")
+
